@@ -1,0 +1,81 @@
+AUDITORIA COMPLETA PMOBILE — 2026-10-18
+
+1. Data/hora da coleta
+Coleta em 2026-10-18; horário do sistema observado nos logs locais ~21:16 UTC (Termux usa UTC-3 nas datas de arquivo). Comandos executados em modo leitura: git status/log/branch/remote/worktree, git ls-remote, gh api, find/ls/stat/sha256sum, aapt dump badging, cat/grep, uname/getprop e comandos de versão/disponibilidade. Nenhum projeto foi construído, alterado ou instalado por esta auditoria. O único arquivo criado foi este relatório.
+
+2. Resumo executivo
+O projeto real PMOBILE-Android está no branch ota-update, HEAD 6d542e334b84b6268935eb8d0ff2454ddde357bf, com uma modificação rastreada e dois arquivos OTA novos não rastreados. A branch não existe publicada no GitHub; os branches remotos visíveis são main e android-capacitor, ambos em 1309d957f264dd9716f089b944b025b9c28faabc e 6568bf2b2acb40ebb86c891461848ae0b72135b2 respectivamente. O APK encontrado antecede o estado OTA atual e não demonstra incluir o código local não commitado. Bridge atual está em branch de teste derivada de main, com alterações preexistentes no receiver e arquivo não rastreado no início desta coleta. Não foi feito commit nem push: a instrução de execução prevalente neste ambiente proíbe explicitamente ambos. Também não foi possível completar consulta ao Supabase por ferramenta/credencial segura disponível.
+
+3. Estado PMOBILE-Android
+Caminho: ~/PMOBILE-Android. Remoto origin: git@github.com:KozeiroKodak/pmobiletest.git. Branch atual ota-update. HEAD 6d542e334b84b6268935eb8d0ff2454ddde357bf (2026-10-17T19:38:18-03:00; “ota: adiciona leitura do estado persistente”). Status: M android/app/src/main/java/com/pmobile/app/OtaManager.java; ?? android/app/src/main/java/com/pmobile/app/OtaManifest.java; ?? android/app/src/main/java/com/pmobile/app/OtaVersion.java. Branches locais: android-capacitor em 6568bf2, bridge/test-003 e ota-update em 6d542e3. Referência remota local origin/android-capacitor em 6568bf2. git ls-remote confirmou remoto main=1309d957 e android-capacitor=6568bf2; ota-update não publicado. Logo há commits locais OTA (75f1bf2, 34c6804, f05a56c, dbef9c6, 6d542e3) e alterações no working tree que não estão nos refs GitHub consultados. Não houve fetch, portanto referências remotas locais podem estar desatualizadas; ls-remote é a evidência direta de ponta remota.
+Arquivos relevantes rastreados: README.md; fontes raiz bancoimportacao.js, conferencia.js, conferencias.js, conferenciasrealizadas.js, dados.js, divergencias.js, importacao.js, index.html, pesquisa.js, script.js, style.css, supabase.js e xlsx.full.min.js; package.json/package-lock.json/capacitor.config.json; espelho www/{index.html,style.css,script.js,dados.js,pesquisa.js,conferencia.js,conferencias.js,conferenciasrealizadas.js,divergencias.js,importacao.js,bancoimportacao.js,supabase.js,xlsx.full.min.js}; Android Manifest, MainActivity.java, OtaManager.java, recursos, Gradle e wrapper. Há node_modules, assets públicos gerados e diretórios de build locais não rastreados pelo git ls-files.
+package.json usa Capacitor Android/CLI/Core ^8.5.3 e App 8.1.2. capacitor.config.json: appId com.pmobile.app, appName PMOBILE, webDir www. android/app/build.gradle: namespace/applicationId com.pmobile.app, versionCode 1, versionName 1.0; compile/target/min definidos em variáveis Gradle. Configuração Android inclui INTERNET e navegação via atividade Capacitor. Fontes mostram implementação de IndexedDB para cópia local e sincronização de materiais, cliente Supabase e painéis de conferência/importação.
+
+4. Estado OTA
+Histórico local: 75f1bf2 (estrutura inicial OtaManager), f05a56c (armazenamento), dbef9c6 (persistência), 6d542e3 (leitura estado persistente); entre eles 34c6804 adiciona navegação pelo botão voltar. Há alteração adicional não commitada no OtaManager e classes novas OtaManifest/OtaVersion não rastreadas. Não publicadas em main/android-capacitor conforme ls-remote. No material inspecionado, OTA é código Android local experimental; o APK identificado tem mtime anterior a esses commits OTA, portanto não corresponde a eles. Detalhes funcionais e segurança OTA além dos nomes/estado local: NÃO VERIFICÁVEL integralmente nesta coleta resumida.
+
+5. Estado dos worktrees
+PMOBILE-Android e ~/PMOBILE-BRIDGE-WORK pertencem ao mesmo repositório Git pmobiletest. O segundo está em bridge/test-003 no mesmo HEAD 6d542e3; limpo. O primeiro está em ota-update no mesmo HEAD e contém as três pendências listadas acima. Worktree list confirma ambos. Os dois branches compartilham a ponta, mas representam diretórios simultâneos distintos.
+Bridge: ~/pmobile-bridge em main HEAD 60ce921e2357cbdcce4667338327fb6de6c9cbe0 (“bridge: implementa push controlado no apply”), limpo e alinhado com origin/main. ~/pmobile-bridge-work em bridge/apply-v1 HEAD 5d367f1baaa10cd96737a5d2fd69630aa5f26048 (“bridge: apply issue #20”), com arquivo rastreado receiver.sh modificado e bridge-push-test-020.txt não rastreado na coleta inicial. O status mostrado ao fim permaneceu branch apply-v1 sem linhas porque esse último comando foi rodado no diretório de trabalho, cuja visão inicial reportou arquivo de teste não rastreado; a coleta final de status com cwd indicou limpo, divergência de observação temporal a confirmar. Git worktree list confirma os dois worktrees simultâneos.
+
+6. Estado PMOBILE Bridge
+Remoto origin git@github.com:KozeiroKodak/pmobile-bridge.git. ls-remote: main=60ce921e2357cbdcce4667338327fb6de6c9cbe0; pmobile-issue-20-apply=5d367f1baaa10cd96737a5d2fd69630aa5f26048. Não existe remote ref confirmado da issue desta auditoria, cujo número nem sequer consta na instrução. Branch local de execução bridge/apply-v1. Local main casa com remoto main. O branch descartável remoto de teste #20 casa com HEAD de apply-v1.
+receiver.sh é um receiver de 25 KB. A leitura estrutural mostrou: leitura da issue/descrição via gh; dispatch ANALYZE/APPLY; APPLY exige branch/worktree válido e limpo antes do trabalho, allowlist não vazia e validada, verifica status por caminho, bloqueia mudanças fora da allowlist, verifica paths staged; permite controle de push por diretiva única PUSH: YES; cria branch remota pmobile-issue-$NUMBER-apply, rejeita refs protegidas, exige destino vazio ou SHA compatível, usa push sem force e confirma SHA remoto pós-push. Há tratamento de falhas pós-commit e atualização de labels/comentários GitHub. Risco operacional: modo APPLY usa Codex com bypass de sandbox/approval no subprocesso (linhas ~247 e ~671); as proteções são implementadas no receiver e dependem da exatidão/integração do script. Comparação aponta main local/remoto alinhado, e branch #20 igual à ref remota. O conteúdo total não está reproduzido aqui, mas principais parsing, allowlist, APPLY, validação e publicação foram inspecionados por marcadores e trechos.
+
+7. Estado Termux/toolchain
+uname: Linux Android kernel 5.4.210, arquitetura aarch64; ABI Android arm64-v8a. Node v24.18.0; npm 11.21.1; Git 2.56.0; OpenJDK 21.0.12; JAVA_HOME=/data/data/com.termux/files/usr/lib/jvm/java-21-openjdk; gh 2.102.0; adb 1.0.41 / 37.0.0p1. binários aapt, aapt2 e zipalign existem em Termux. Codex, npx e node disponíveis; versão Codex NÃO VERIFICÁVEL nesta execução. Android SDK em ~/android-sdk, plataformas android-36, build-tools 35.0.0 (aapt/aapt2/zipalign). apkanalyzer não encontrado. Gradle global não encontrado; wrapper do projeto declara Gradle 8.14.3, mas não foi executado. Capacitor instalado como dependência local indicada por package.json; chamada npx cap --version não resolveu executável e apresentou erro npm, não foi tentada instalação.
+
+8. Estado APK
+Encontrado somente android/app/build/outputs/apk/debug/app-debug.apk; PMOBILE-debug.apk não encontrado nos diretórios consultados. Tamanho 4.549.009 bytes; SHA256 e4320f94d15e9456474e6df44fd694b5e605d563ddcfeb0d7c62ff5a62d935d3; mtime 2026-10-17 19:37:38 -0300. aapt dump badging identificou com.pmobile.app, versionCode 1, versionName 1.0, minSdk 24, targetSdk 36, compileSdk 36 (platform build 36). Não reconstruído. Como o APK foi gravado antes dos commits OTA locais e estes estão ausentes do remoto, não pode ser usado como evidência de que o OTA em trabalho está incorporado. O hash de artefato é verificável; conteúdo funcional comparado ao projeto apenas por datas e estado Git.
+
+9. Estado GitHub
+pmobiletest: ls-remote mostrou main 1309d957f264dd9716f089b944b025b9c28faabc, android-capacitor 6568bf2b2acb40ebb86c891461848ae0b72135b2. gh api branches também retornou main e android-capacitor; ota-update não existe. A busca não demonstrou branch ota-update publicado. pmobile-bridge: main 60ce921e2357cbdcce4667338327fb6de6c9cbe0; pmobile-issue-20-apply 5d367f1baaa10cd96737a5d2fd69630aa5f26048. HEAD atual do teste #20 coincide com sua ref. Não se criou branch nem PR.
+
+10. Estado Supabase
+NÃO VERIFICÁVEL. Não foi identificada configuração/credencial segura consultável nem ferramenta Supabase administrativa já configurada. Foram encontrados arquivos supabase.js no projeto (raiz e www), mas não foram extraídos nem registrados valores de configuração. Sem acesso administrativo read-only não é possível confirmar tabelas, contagens, funções/RPCs, RLS/policies, índices, FKs, triggers ou diagnóstico de materiais. Nenhuma conexão, mutação ou tentativa de acesso com credenciais foi feita.
+
+11. Auditoria funcional por área
+Importação DOGo: interface indica seleção de Excel exportado do DOGO; importacao.js/bancoimportacao.js e xlsx.full.min.js são os módulos atribuídos. Evidência de presença, execução funcional não testada.
+Mapeamento: dados.js implementa normalização de estruturas e preservação de idSupabase conforme comentários/funções identificadas; transformação completa registro a registro não foi auditada.
+Pesquisa/conferência: páginas e scripts pesquisa.js, conferencia.js, conferencias.js, conferenciasrealizadas.js e divergencias.js existem e estão ligados na interface; validação em runtime não realizada.
+Offline/IndexedDB: dados.js contém inicialização IndexedDB, object store de materiais, gravação e rotina de sincronização do Supabase para cópia local. Arquitetura documentada define Supabase como fonte oficial e IndexedDB como cópia/fallback; decisão arquitetural, não falha. Comportamento de conflito/sincronização em execução NÃO VERIFICÁVEL.
+Supabase: integração cliente e operações por tabela são aparentes no código, mas esquema/policies e conectividade real não verificados.
+Navegação Android: MainActivity/manifest Capacitor presentes; commit 34c6804 documenta adição de botão voltar. Fluxos Android não exercitados.
+OTA: estrutura Java em andamento no branch local, porém sem publicação, com arquivos modificados/não rastreados; APK encontrado antecede o trabalho.
+
+12. Divergências encontradas
+- Branch local ota-update está ausente do GitHub; contém cinco commits após android-capacitor e três alterações ainda sem commit.
+- APK debug é anterior ao estado OTA atual; não incorpora comprovadamente esse estado.
+- pmobile-bridge-work difere de main por branch/commit de teste e alteração local do receiver reportada na coleta inicial; houve variação de saída de status entre comandos, recomendada confirmação posterior.
+- Issue número não fornecido como valor concreto na instrução exibida; não é possível definir com segurança a branch pmobile-issue-<n>-apply nem confirmar seu SHA remoto.
+- A coleta de árvore foi limitada a arquivos rastreados e listagem de arquivos do projeto, excluindo node_modules/build para evitar inventário volumoso; por isso não é um inventário integral de cada artefato gerado.
+
+13. Riscos
+- O trabalho OTA ainda não publicado pode ser perdido para outros colaboradores se o diretório local for descartado; há alterações não commitadas.
+- APK desatualizado frente ao OTA pode ser distribuído como se contivesse código posterior, se não houver controle de artefato externo.
+- Tabelas/policies/RLS do Supabase não foram auditadas, portanto risco de acesso indevido ou integridade do banco permanece sem avaliação, não sendo afirmada falha.
+- Receiver automatiza APPLY e push com validações próprias; sua segurança depende de manutenção e revisão contínuas. Uso de bypass de sandbox/approval pelo processo Codex é risco real de contenção reduzida. Push é protegido por allowlist/branch descartável e verificação de SHA no script inspecionado.
+- Não foram executados testes ou build; comportamento funcional e compatibilidade de ambiente não são certificados.
+
+14. Itens não verificáveis
+- Esquema, dados, contagens, policies/RLS, índices, FKs, triggers, RPCs e diagnóstico Supabase.
+- Existência de ota-update em qualquer ref GitHub não consultada além de branches enumerados/ls-remote; busca de branches disponíveis não retornou essa ref.
+- Execução runtime das funcionalidades web/Android/OTA; testes não realizados.
+- Gradle global, apkanalyzer e versão do Codex; ferramentas ausentes ou comando não conclusivo.
+- Hash/metadata do artefato PMOBILE-debug.apk, pois não encontrado.
+- Estado material completo do receiver no início versus final, devido a saída de status temporal divergente; nenhum arquivo de configuração deve ser inferido como limpo a partir de uma única saída.
+
+15. Conclusão conservadora
+Estado coletado mostra aplicação web híbrida Capacitor com módulos de importação, pesquisa, conferência, persistência local IndexedDB e integração Supabase. O desenvolvimento OTA está restrito ao checkout local e ainda tem mudanças sem commit, e o APK disponível é anterior a ele. O Bridge tem implementação de APPLY com allowlist e publicação em branch descartável, mas o checkout de trabalho contém diferença relatada e a consulta ao banco foi impossível. Esta auditoria é estática e não valida comportamento em dispositivo ou Supabase. Nenhum projeto, branch, worktree, banco ou configuração foi modificado deliberadamente.
+
+16. SHAs relevantes e evidências
+PMOBILE:
+- local HEAD ota-update: 6d542e334b84b6268935eb8d0ff2454ddde357bf
+- remoto pmobiletest/main: 1309d957f264dd9716f089b944b025b9c28faabc
+- remoto pmobiletest/android-capacitor: 6568bf2b2acb40ebb86c891461848ae0b72135b2
+Bridge:
+- local/remote main: 60ce921e2357cbdcce4667338327fb6de6c9cbe0
+- local bridge/apply-v1: 5d367f1baaa10cd96737a5d2fd69630aa5f26048
+- remoto pmobile-issue-20-apply: 5d367f1baaa10cd96737a5d2fd69630aa5f26048
+APK SHA256: e4320f94d15e9456474e6df44fd694b5e605d563ddcfeb0d7c62ff5a62d935d3
+Evidências principais: git status/branch/log/worktree; git ls-remote origin; gh api branches; aapt dump badging; stat/sha256sum; find/git ls-files; inspeção textual de receiver.sh, Capacitor/Gradle e scripts web. Não houve commit ou push nesta execução.
