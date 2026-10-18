@@ -71,11 +71,166 @@ echo "Modo detectado: ${MODE:-NAO INFORMADO}"
 echo "Alvo detectado: $TARGET"
 
 # ============================================================
-# APPLY (reconhecido, ainda bloqueado)
+# APPLY
 # ============================================================
 
 if [ "$MODE" = "APPLY" ]; then
-  echo "APPLY reconhecido, mas bloqueado: modo ainda nao implementado."
+  echo
+  echo "===== APPLY CONTROLADO NO WORKTREE ====="
+
+  apply_fail() {
+    echo "FALHA APPLY: $1"
+    gh issue edit "$NUMBER" \
+      --repo "$REPO" \
+      --remove-label "pmobile:pending" \
+      --remove-label "pmobile:processing" \
+      --add-label "pmobile:failed" >/dev/null 2>&1 || true
+    exit 1
+  }
+
+  if [ ! -d "$WORKTREE/.git" ] && [ ! -f "$WORKTREE/.git" ]; then
+    apply_fail "worktree nao encontrado: $WORKTREE"
+  fi
+
+  REAL_HEAD="$(git -C "$PROJECT" rev-parse HEAD 2>/dev/null)" || apply_fail "nao foi possivel ler HEAD do projeto real"
+  WORKTREE_HEAD="$(git -C "$WORKTREE" rev-parse HEAD 2>/dev/null)" || apply_fail "nao foi possivel ler HEAD do worktree"
+  WORKTREE_BRANCH="$(git -C "$WORKTREE" branch --show-current 2>/dev/null)" || apply_fail "nao foi possivel ler branch do worktree"
+
+  if [ "$TARGET" = "BRIDGE" ]; then
+    if ! git -C "$WORKTREE" merge-base --is-ancestor "$REAL_HEAD" "$WORKTREE_HEAD"; then
+      apply_fail "worktree do BRIDGE esta atras ou divergente do projeto real"
+    fi
+  elif [ "$REAL_HEAD" != "$WORKTREE_HEAD" ]; then
+    apply_fail "projeto real e worktree possuem HEADs diferentes"
+  fi
+
+  if [ -z "$WORKTREE_BRANCH" ]; then
+    apply_fail "worktree esta em detached HEAD; commit exige branch"
+  fi
+
+  INITIAL_STATUS="$(git -C "$WORKTREE" status --porcelain)" || apply_fail "nao foi possivel verificar worktree"
+  if [ -n "$INITIAL_STATUS" ]; then
+    echo "$INITIAL_STATUS"
+    apply_fail "worktree precisa estar limpo antes do APPLY"
+  fi
+
+  ALLOWED_FILES="$(
+    printf '%s\n' "$BODY" |
+    sed -n '/^ARQUIVOS_PERMITIDOS:[[:space:]]*$/,/^FIM_ARQUIVOS_PERMITIDOS[[:space:]]*$/p' |
+    sed '1d;$d;/^[[:space:]]*$/d'
+  )"
+  [ -n "$ALLOWED_FILES" ] || apply_fail "APPLY sem ARQUIVOS_PERMITIDOS"
+
+  INVALID_ALLOWLIST=0
+  while IFS= read -r ALLOWED_FILE; do
+    case "$ALLOWED_FILE" in
+      /*|..|../*|*/..|*/../*|.git|.git/*|*/.git|*/.git/*)
+        echo "Caminho proibido: $ALLOWED_FILE"
+        INVALID_ALLOWLIST=1
+        ;;
+    esac
+  done <<EOF_APPLY_ALLOWED
+$ALLOWED_FILES
+EOF_APPLY_ALLOWED
+  [ "$INVALID_ALLOWLIST" -eq 0 ] || apply_fail "allowlist invalida"
+
+  gh issue edit "$NUMBER" \
+    --repo "$REPO" \
+    --remove-label "pmobile:pending" \
+    --add-label "pmobile:processing" >/dev/null || apply_fail "nao foi possivel marcar issue como processing"
+
+  rm -f "$RESULT"
+  {
+    echo "Voce esta executando APPLY controlado do PMOBILE Bridge."
+    echo
+    echo "DIRETORIO DE TRABALHO:"
+    echo "$WORKTREE"
+    echo
+    echo "REGRAS OBRIGATORIAS:"
+    echo "- Trabalhe SOMENTE no diretorio atual."
+    echo "- Edite SOMENTE os arquivos listados em ARQUIVOS_PERMITIDOS."
+    echo "- NAO faca commit nem push; o receiver fara o commit validado."
+    echo "- NAO use checkout, reset, clean, stash, merge ou cherry-pick."
+    echo "- Nao altere arquivos fora da tarefa."
+    echo
+    echo "===== INSTRUCAO DA ISSUE ====="
+    printf '%s\n' "$BODY"
+    echo "===== FIM DA INSTRUCAO ====="
+  } |
+  proot \
+    -b "$PREFIX/etc/resolv.conf:/etc/resolv.conf" \
+    -b "$PREFIX/etc/tls/cert.pem:/etc/ssl/certs/ca-certificates.crt" \
+    codex --no-daemon exec \
+      --dangerously-bypass-approvals-and-sandbox \
+      --cd "$WORKTREE" \
+      --output-last-message "$RESULT" \
+      -
+  CODEX_EXIT=$?
+
+  FINAL_STATUS="$(git -C "$WORKTREE" status --porcelain)" || apply_fail "nao foi possivel validar resultado do Codex"
+  CHANGED_FILES="$(git -C "$WORKTREE" status --porcelain | sed 's/^...//')" || apply_fail "nao foi possivel listar arquivos alterados"
+  VALID=1
+  [ "$CODEX_EXIT" -eq 0 ] || VALID=0
+  [ -n "$FINAL_STATUS" ] || VALID=0
+
+  while IFS= read -r CHANGED_FILE; do
+    [ -n "$CHANGED_FILE" ] || continue
+    if ! printf '%s\n' "$ALLOWED_FILES" | grep -Fqx -- "$CHANGED_FILE"; then
+      echo "FALHA: arquivo fora da allowlist: $CHANGED_FILE"
+      VALID=0
+    fi
+  done <<EOF_APPLY_CHANGED
+$CHANGED_FILES
+EOF_APPLY_CHANGED
+  [ "$VALID" -eq 1 ] || apply_fail "validacao independente reprovada; nenhum commit criado"
+
+  # Stage cada caminho permitido que foi alterado; nunca usar staging amplo.
+  while IFS= read -r ALLOWED_FILE; do
+    [ -n "$ALLOWED_FILE" ] || continue
+    if printf '%s\n' "$CHANGED_FILES" | grep -Fqx -- "$ALLOWED_FILE"; then
+      git -C "$WORKTREE" add -A -- "$ALLOWED_FILE" || apply_fail "falha ao adicionar caminho permitido ao staging"
+    fi
+  done <<EOF_APPLY_STAGE
+$ALLOWED_FILES
+EOF_APPLY_STAGE
+
+  STAGED_FILES="$(git -C "$WORKTREE" diff --cached --name-only)" || apply_fail "nao foi possivel validar staging"
+  [ -n "$STAGED_FILES" ] || apply_fail "nenhuma alteracao staged; commit vazio impedido"
+  while IFS= read -r STAGED_FILE; do
+    [ -n "$STAGED_FILE" ] || continue
+    if ! printf '%s\n' "$ALLOWED_FILES" | grep -Fqx -- "$STAGED_FILE"; then
+      apply_fail "caminho staged fora da allowlist: $STAGED_FILE"
+    fi
+  done <<EOF_APPLY_STAGED
+$STAGED_FILES
+EOF_APPLY_STAGED
+
+  git -C "$WORKTREE" diff --cached --check || apply_fail "git diff --cached --check falhou"
+  ISSUE_COMMIT="bridge: apply issue #$NUMBER"
+  git -C "$WORKTREE" commit -m "$ISSUE_COMMIT" || apply_fail "commit falhou"
+  COMMIT_HASH="$(git -C "$WORKTREE" rev-parse HEAD)" || apply_fail "nao foi possivel ler commit criado"
+
+  {
+    echo "## Resultado automático do PMOBILE Bridge"
+    echo
+    echo "### APPLY controlado"
+    echo
+    echo "Resultado: APROVADO"
+    echo
+    echo "Commit: $COMMIT_HASH ($ISSUE_COMMIT)"
+    echo
+    echo "Arquivos commitados:"
+    printf '```text\n%s\n```\n' "$STAGED_FILES"
+    echo
+    echo "Commit criado somente na branch isolada: $WORKTREE_BRANCH"
+    echo "Nenhum push foi realizado."
+  } > "$COMMENT_FILE"
+
+  if ! gh issue comment "$NUMBER" --repo "$REPO" --body-file "$COMMENT_FILE"; then
+    apply_fail "commit criado, mas falhou ao comentar resultado"
+  fi
+  gh issue edit "$NUMBER" --repo "$REPO" --remove-label "pmobile:processing" --add-label "pmobile:done" >/dev/null || apply_fail "commit criado, mas falhou ao marcar issue done"
+  echo "APPLY concluido: $COMMIT_HASH; sem push."
   exit 0
 fi
 
