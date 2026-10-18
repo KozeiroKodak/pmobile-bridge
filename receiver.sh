@@ -91,7 +91,11 @@ if [ "$MODE" = "APPLY" ]; then
   apply_report_fail() {
     echo "FALHA DE REPORTE/FINALIZACAO NO GITHUB: $1"
     echo "O commit local $COMMIT_HASH foi criado na branch isolada $WORKTREE_BRANCH."
-    echo "O APPLY local foi concluido; somente o reporte/finalizacao no GitHub falhou. Nenhum push foi realizado."
+    if [ "${PUSH_CONFIRMED:-0}" -eq 1 ]; then
+      echo "O push de $COMMIT_HASH para $PUSH_BRANCH foi confirmado pelo SHA remoto; somente o reporte/finalizacao no GitHub falhou."
+    else
+      echo "O APPLY local foi concluido; somente o reporte/finalizacao no GitHub falhou. Nenhum push foi confirmado."
+    fi
     exit 1
   }
 
@@ -255,6 +259,70 @@ EOF_APPLY_ALLOWED_ARRAY
   ISSUE_COMMIT="bridge: apply issue #$NUMBER"
   git -C "$WORKTREE" commit -m "$ISSUE_COMMIT" || apply_fail "commit falhou"
   COMMIT_HASH="$(git -C "$WORKTREE" rev-parse HEAD)" || apply_fail "nao foi possivel ler commit criado"
+  PUSH_CONFIRMED=0
+  PUSH_DIRECTIVES="$(printf '%s\n' "$BODY" | sed -n '/^PUSH:/p' | wc -l | tr -d '[:space:]')"
+  PUSH_YES_COUNT="$(printf '%s\n' "$BODY" | sed -n '/^PUSH:[[:space:]]*YES[[:space:]]*$/p' | wc -l | tr -d '[:space:]')"
+  PUSH_ENABLED=0
+  if [ "$PUSH_DIRECTIVES" -gt 0 ]; then
+    [ "$PUSH_DIRECTIVES" -eq 1 ] && [ "$PUSH_YES_COUNT" -eq 1 ] || apply_fail "diretiva PUSH ambigua; use exatamente uma linha PUSH: YES para habilitar"
+    PUSH_ENABLED=1
+  fi
+
+  if [ "$PUSH_ENABLED" -eq 1 ]; then
+    case "$NUMBER" in
+      ''|*[!0-9]*) apply_fail "numero de issue invalido para destino de push" ;;
+    esac
+    [ "$NUMBER" -gt 0 ] 2>/dev/null || apply_fail "numero de issue invalido para destino de push"
+    [ "$TARGET" = "BRIDGE" ] || apply_fail "push opcional permitido somente para alvo BRIDGE"
+    PUSH_BRANCH="pmobile-issue-${NUMBER}-apply"
+    case "$PUSH_BRANCH" in
+      main|master|android-capacitor|ota-update) apply_fail "destino de push proibido" ;;
+      pmobile-issue-[0-9]*-apply) ;;
+      *) apply_fail "destino de push interno invalido" ;;
+    esac
+
+    STATUS_FILE="$(mktemp)" || apply_fail "nao foi possivel criar validacao pre-push"
+    if ! git -C "$WORKTREE" status --porcelain=v1 -z --untracked-files=all > "$STATUS_FILE"; then
+      rm -f "$STATUS_FILE"
+      apply_fail "nao foi possivel validar worktree antes do push"
+    fi
+    if [ -s "$STATUS_FILE" ]; then
+      rm -f "$STATUS_FILE"
+      apply_fail "worktree nao esta limpo apos commit; push impedido"
+    fi
+    rm -f "$STATUS_FILE"
+
+    CURRENT_HEAD="$(git -C "$WORKTREE" rev-parse HEAD 2>/dev/null)" || apply_fail "nao foi possivel confirmar HEAD antes do push"
+    [ "$CURRENT_HEAD" = "$COMMIT_HASH" ] || apply_fail "HEAD mudou apos commit; push impedido"
+    EXPECTED_REMOTE="$(git -C "$WORKTREE" remote get-url origin 2>/dev/null)" || apply_fail "remoto origin nao configurado"
+    case "$EXPECTED_REMOTE" in
+      https://github.com/KozeiroKodak/pmobiletest.git|https://github.com/KozeiroKodak/pmobiletest|git@github.com:KozeiroKodak/pmobiletest.git|ssh://git@github.com/KozeiroKodak/pmobiletest.git) ;;
+      *) apply_fail "URL do remoto origin nao corresponde ao repositorio fixo do Bridge" ;;
+    esac
+
+    REMOTE_BEFORE="$(git -C "$WORKTREE" ls-remote --heads origin "refs/heads/$PUSH_BRANCH")" || apply_fail "nao foi possivel consultar branch remota antes do push"
+    REMOTE_SHA="$(printf '%s\n' "$REMOTE_BEFORE" | awk 'NR == 1 {print $1}')"
+    if [ -n "$REMOTE_SHA" ]; then
+      [ "$REMOTE_SHA" = "$COMMIT_HASH" ] || apply_fail "branch remota ja existe com SHA diferente; sobrescrita impedida"
+      PUSH_CONFIRMED=1
+    else
+      if git -C "$WORKTREE" push origin "$COMMIT_HASH:refs/heads/$PUSH_BRANCH"; then
+        PUSH_COMMAND_OK=1
+      else
+        PUSH_COMMAND_OK=0
+      fi
+      REMOTE_AFTER="$(git -C "$WORKTREE" ls-remote --heads origin "refs/heads/$PUSH_BRANCH")" || apply_fail "push incerto e consulta remota posterior falhou; commit local $COMMIT_HASH permanece criado"
+      REMOTE_SHA="$(printf '%s\n' "$REMOTE_AFTER" | awk 'NR == 1 {print $1}')"
+      if [ "$REMOTE_SHA" = "$COMMIT_HASH" ]; then
+        PUSH_CONFIRMED=1
+      elif [ "$PUSH_COMMAND_OK" -eq 0 ]; then
+        apply_fail "push falhou e o SHA esperado nao esta publicado"
+      else
+        apply_fail "push retornou sucesso, mas o SHA remoto nao corresponde ao commit esperado"
+      fi
+    fi
+    echo "Push confirmado: $COMMIT_HASH -> refs/heads/$PUSH_BRANCH"
+  fi
   printf -v STAGED_FILES '%s\n' "${STAGED_PATHS[@]}"
 
   {
@@ -270,14 +338,22 @@ EOF_APPLY_ALLOWED_ARRAY
     printf '```text\n%s\n```\n' "$STAGED_FILES"
     echo
     echo "Commit criado somente na branch isolada: $WORKTREE_BRANCH"
-    echo "Nenhum push foi realizado."
+    if [ "$PUSH_CONFIRMED" -eq 1 ]; then
+      echo "Push confirmado: refs/heads/$PUSH_BRANCH aponta para $COMMIT_HASH."
+    else
+      echo "Nenhum push foi realizado."
+    fi
   } > "$COMMENT_FILE"
 
   if ! gh issue comment "$NUMBER" --repo "$REPO" --body-file "$COMMENT_FILE"; then
     apply_report_fail "falhou ao comentar resultado"
   fi
   gh issue edit "$NUMBER" --repo "$REPO" --remove-label "pmobile:processing" --add-label "pmobile:done" >/dev/null || apply_report_fail "falhou ao marcar issue done"
-  echo "APPLY concluido: $COMMIT_HASH; sem push."
+  if [ "$PUSH_CONFIRMED" -eq 1 ]; then
+    echo "APPLY concluido: $COMMIT_HASH; push confirmado em $PUSH_BRANCH."
+  else
+    echo "APPLY concluido: $COMMIT_HASH; sem push."
+  fi
   exit 0
 fi
 
