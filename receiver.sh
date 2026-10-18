@@ -43,7 +43,32 @@ MODE="$(
   tr '[:lower:]' '[:upper:]'
 )"
 
+TARGET="$(
+  printf '%s\n' "$BODY" |
+  sed -n 's/^ALVO:[[:space:]]*//p' |
+  head -n 1 |
+  tr '[:lower:]' '[:upper:]'
+)"
+
+[ -z "$TARGET" ] && TARGET="PMOBILE"
+
+case "$TARGET" in
+  PMOBILE)
+    PROJECT="$HOME/PMOBILE-Android"
+    WORKTREE="$HOME/PMOBILE-BRIDGE-WORK"
+    ;;
+  BRIDGE)
+    PROJECT="$HOME/pmobile-bridge"
+    WORKTREE="$HOME/pmobile-bridge-work"
+    ;;
+  *)
+    echo "ERRO: ALVO invalido: $TARGET"
+    exit 1
+    ;;
+esac
+
 echo "Modo detectado: ${MODE:-NAO INFORMADO}"
+echo "Alvo detectado: $TARGET"
 
 BRANCH="$(git -C "$PROJECT" branch --show-current)" || exit 1
 STATUS="$(git -C "$PROJECT" status --short)" || exit 1
