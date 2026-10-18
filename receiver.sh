@@ -71,6 +71,111 @@ echo "Modo detectado: ${MODE:-NAO INFORMADO}"
 echo "Alvo detectado: $TARGET"
 
 # ============================================================
+# AUDIT — leitura direta do projeto real, sem uso de WORKTREE
+# ============================================================
+
+if [ "$MODE" = "AUDIT" ]; then
+  if [ "$TARGET" != "PMOBILE" ]; then
+    echo "ERRO: AUDIT permitido somente para ALVO: PMOBILE."
+    gh issue edit "$NUMBER" \
+      --repo "$REPO" \
+      --remove-label "pmobile:pending" \
+      --remove-label "pmobile:processing" \
+      --add-label "pmobile:failed" >/dev/null 2>&1 || true
+    exit 1
+  fi
+
+  audit_fail() {
+    local reason="$1"
+    echo "AUDIT falhou: $reason"
+    {
+      echo "## Resultado automático do PMOBILE Bridge"
+      echo
+      echo "### AUDIT somente-leitura"
+      echo
+      echo "Resultado: FALHA"
+      echo
+      echo "Diagnóstico: $reason"
+    } > "$COMMENT_FILE"
+    gh issue comment "$NUMBER" --repo "$REPO" --body-file "$COMMENT_FILE" >/dev/null 2>&1 || true
+    gh issue edit "$NUMBER" \
+      --repo "$REPO" \
+      --remove-label "pmobile:pending" \
+      --remove-label "pmobile:processing" \
+      --add-label "pmobile:failed" >/dev/null 2>&1 || true
+    exit 1
+  }
+
+  [ -d "$PROJECT" ] || audit_fail "projeto real nao encontrado: $PROJECT"
+  PROJECT_ABS="$(cd "$PROJECT" 2>/dev/null && pwd -P)" || audit_fail "nao foi possivel resolver caminho do projeto"
+  AUDIT_BRANCH="$(git -C "$PROJECT_ABS" branch --show-current 2>/dev/null)" || audit_fail "nao foi possivel ler branch do projeto"
+  AUDIT_HEAD="$(git -C "$PROJECT_ABS" rev-parse HEAD 2>/dev/null)" || audit_fail "nao foi possivel ler HEAD do projeto"
+  AUDIT_STATUS="$(git -C "$PROJECT_ABS" status --short 2>/dev/null)" || audit_fail "nao foi possivel ler status do projeto"
+
+  gh issue edit "$NUMBER" \
+    --repo "$REPO" \
+    --remove-label "pmobile:pending" \
+    --add-label "pmobile:processing" >/dev/null || audit_fail "nao foi possivel marcar issue como processing"
+
+  rm -f "$RESULT"
+  {
+    echo "Voce esta executando uma auditoria tecnica somente-leitura do projeto PMOBILE real."
+    echo
+    echo "PROJECT absoluto: $PROJECT_ABS"
+    echo "Branch atual: ${AUDIT_BRANCH:-DETACHED HEAD}"
+    echo "HEAD atual: $AUDIT_HEAD"
+    echo "Status atual (git status --short):"
+    printf '%s\n' "$AUDIT_STATUS"
+    echo
+    echo "As alteracoes locais existentes sao preservadas e fazem parte do snapshot auditado."
+    echo "Inspecione o projeto diretamente neste diretorio e execute comandos de diagnostico somente-leitura que sejam necessarios."
+    echo "Nao altere nada no projeto: nao escreva arquivos, nem faca git add/stage, commit, push, checkout, reset, clean, stash, merge ou cherry-pick."
+    echo "Nao crie, edite, stageie ou publique arquivos no repositorio PMOBILE, nem faca qualquer outra alteracao nele."
+    echo
+    echo "===== INSTRUCAO DA ISSUE ====="
+    printf '%s\n' "$BODY"
+    echo "===== FIM DA INSTRUCAO ====="
+  } |
+  proot \
+    -b "$PREFIX/etc/resolv.conf:/etc/resolv.conf" \
+    -b "$PREFIX/etc/tls/cert.pem:/etc/ssl/certs/ca-certificates.crt" \
+    codex --no-daemon exec \
+      --sandbox read-only \
+      --cd "$PROJECT_ABS" \
+      --output-last-message "$RESULT" \
+      -
+  CODEX_EXIT=$?
+
+  if [ "$CODEX_EXIT" -ne 0 ] || [ ! -s "$RESULT" ]; then
+    audit_fail "Codex falhou ou nao gerou resultado final"
+  fi
+
+  {
+    echo "## Resultado automático do PMOBILE Bridge"
+    echo
+    echo "### AUDIT somente-leitura"
+    echo
+    echo "Projeto: $PROJECT_ABS"
+    echo "Branch: ${AUDIT_BRANCH:-DETACHED HEAD}"
+    echo "HEAD: $AUDIT_HEAD"
+    echo "Status inicial registrado; alteracoes locais existentes fazem parte do snapshot auditado."
+    echo
+    cat "$RESULT"
+  } > "$COMMENT_FILE"
+
+  if ! gh issue comment "$NUMBER" --repo "$REPO" --body-file "$COMMENT_FILE"; then
+    audit_fail "falhou ao publicar resultado da auditoria"
+  fi
+  gh issue edit "$NUMBER" \
+    --repo "$REPO" \
+    --remove-label "pmobile:processing" \
+    --add-label "pmobile:done" >/dev/null || audit_fail "falhou ao marcar issue done"
+
+  echo "AUDIT concluido; resultado salvo em $RESULT."
+  exit 0
+fi
+
+# ============================================================
 # APPLY
 # ============================================================
 
@@ -572,34 +677,7 @@ if [ "$MODE" = "EDIT" ]; then
     echo "HEAD validado: projeto real e worktree sao iguais."
   fi
 
-  INITIAL_STATUS="$(
-    git -C "$WORKTREE" status --porcelain
-  )"
-
-  if [ -n "$INITIAL_STATUS" ]; then
-    echo "ERRO: worktree nao esta limpo."
-    printf '%s\n' "$INITIAL_STATUS"
-
-    gh issue edit "$NUMBER" \
-      --repo "$REPO" \
-      --remove-label "pmobile:pending" \
-      --add-label "pmobile:failed" >/dev/null
-
-    exit 1
-  fi
-
-  echo "Worktree validado:"
-  echo "$WORKTREE"
-  echo "Estado inicial: LIMPO"
-
-  gh issue edit "$NUMBER" \
-    --repo "$REPO" \
-    --remove-label "pmobile:pending" \
-    --add-label "pmobile:processing" >/dev/null || exit 1
-
-  rm -f "$RESULT"
-
-    # ALLOWLIST DE ARQUIVOS PARA EDIT
+  # ALLOWLIST DE ARQUIVOS PARA EDIT
     ALLOWED_FILES="$(
       printf '%s\n' "$BODY" |
       sed -n '/^ARQUIVOS_PERMITIDOS:[[:space:]]*$/,/^FIM_ARQUIVOS_PERMITIDOS[[:space:]]*$/p' |
@@ -640,6 +718,49 @@ EOF_ALLOWED
         --add-label "pmobile:failed" >/dev/null || true
       exit 1
     fi
+
+  INITIAL_PATHS_FILE="$(mktemp)" || exit 1
+  if ! git -C "$WORKTREE" diff HEAD --name-only --no-renames -z > "$INITIAL_PATHS_FILE" ||
+     ! git -C "$WORKTREE" ls-files --others --exclude-standard -z >> "$INITIAL_PATHS_FILE"; then
+    rm -f "$INITIAL_PATHS_FILE"
+    echo "ERRO: nao foi possivel verificar alteracoes iniciais do worktree."
+    exit 1
+  fi
+  INITIAL_PATHS=()
+  while IFS= read -r -d '' INITIAL_PATH; do
+    INITIAL_PATHS+=("$INITIAL_PATH")
+  done < "$INITIAL_PATHS_FILE"
+  rm -f "$INITIAL_PATHS_FILE"
+
+  # Um unico receiver.sh pre-existente e permitido somente se estiver na allowlist.
+  if [ "${#INITIAL_PATHS[@]}" -gt 0 ]; then
+    if [ "${#INITIAL_PATHS[@]}" -ne 1 ] ||
+       [ "${INITIAL_PATHS[0]}" != "receiver.sh" ] ||
+       ! printf '%s\n' "$ALLOWED_FILES" | grep -Fqx -- "receiver.sh"; then
+      echo "ERRO: worktree possui alteracoes iniciais fora da excecao permitida."
+      printf '%s\n' "${INITIAL_PATHS[@]}"
+
+      gh issue edit "$NUMBER" \
+        --repo "$REPO" \
+        --remove-label "pmobile:pending" \
+        --add-label "pmobile:failed" >/dev/null
+
+      exit 1
+    fi
+    echo "Estado inicial: somente receiver.sh alterado e explicitamente permitido."
+  else
+    echo "Estado inicial: LIMPO"
+  fi
+
+  echo "Worktree validado:"
+  echo "$WORKTREE"
+
+  gh issue edit "$NUMBER" \
+    --repo "$REPO" \
+    --remove-label "pmobile:pending" \
+    --add-label "pmobile:processing" >/dev/null || exit 1
+
+  rm -f "$RESULT"
 
 
 
