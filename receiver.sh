@@ -70,6 +70,15 @@ esac
 echo "Modo detectado: ${MODE:-NAO INFORMADO}"
 echo "Alvo detectado: $TARGET"
 
+# ============================================================
+# APPLY (reconhecido, ainda bloqueado)
+# ============================================================
+
+if [ "$MODE" = "APPLY" ]; then
+  echo "APPLY reconhecido, mas bloqueado: modo ainda nao implementado."
+  exit 0
+fi
+
 BRANCH="$(git -C "$PROJECT" branch --show-current)" || exit 1
 STATUS="$(git -C "$PROJECT" status --short)" || exit 1
 
