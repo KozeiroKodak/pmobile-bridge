@@ -88,6 +88,32 @@ if [ "$MODE" = "APPLY" ]; then
     exit 1
   }
 
+  apply_report_fail() {
+    echo "FALHA DE REPORTE/FINALIZACAO NO GITHUB: $1"
+    echo "O commit local $COMMIT_HASH foi criado na branch isolada $WORKTREE_BRANCH."
+    echo "O APPLY local foi concluido; somente o reporte/finalizacao no GitHub falhou. Nenhum push foi realizado."
+    exit 1
+  }
+
+  load_status_paths() {
+    local status_file="$1"
+    local record path status
+    CHANGED_PATHS=()
+    git -C "$WORKTREE" status --porcelain=v1 -z --untracked-files=all > "$status_file" || return 1
+    while IFS= read -r -d '' record; do
+      [ -n "$record" ] || continue
+      status="${record:0:2}"
+      path="${record:3}"
+      CHANGED_PATHS+=("$path")
+      case "$status" in
+        *R*|*C*)
+          IFS= read -r -d '' path || return 1
+          CHANGED_PATHS+=("$path")
+          ;;
+      esac
+    done < "$status_file"
+  }
+
   if [ ! -d "$WORKTREE/.git" ] && [ ! -f "$WORKTREE/.git" ]; then
     apply_fail "worktree nao encontrado: $WORKTREE"
   fi
@@ -108,11 +134,17 @@ if [ "$MODE" = "APPLY" ]; then
     apply_fail "worktree esta em detached HEAD; commit exige branch"
   fi
 
-  INITIAL_STATUS="$(git -C "$WORKTREE" status --porcelain)" || apply_fail "nao foi possivel verificar worktree"
-  if [ -n "$INITIAL_STATUS" ]; then
-    echo "$INITIAL_STATUS"
+  STATUS_FILE="$(mktemp)" || apply_fail "nao foi possivel criar arquivo temporario de validacao"
+  if ! git -C "$WORKTREE" status --porcelain=v1 -z --untracked-files=all > "$STATUS_FILE"; then
+    rm -f "$STATUS_FILE"
+    apply_fail "nao foi possivel verificar worktree"
+  fi
+  if [ -s "$STATUS_FILE" ]; then
+    git -C "$WORKTREE" status --short
+    rm -f "$STATUS_FILE"
     apply_fail "worktree precisa estar limpo antes do APPLY"
   fi
+  rm -f "$STATUS_FILE"
 
   ALLOWED_FILES="$(
     printf '%s\n' "$BODY" |
@@ -167,48 +199,63 @@ EOF_APPLY_ALLOWED
       -
   CODEX_EXIT=$?
 
-  FINAL_STATUS="$(git -C "$WORKTREE" status --porcelain)" || apply_fail "nao foi possivel validar resultado do Codex"
-  CHANGED_FILES="$(git -C "$WORKTREE" status --porcelain | sed 's/^...//')" || apply_fail "nao foi possivel listar arquivos alterados"
+  STATUS_FILE="$(mktemp)" || apply_fail "nao foi possivel criar arquivo temporario de validacao"
+  load_status_paths "$STATUS_FILE" || { rm -f "$STATUS_FILE"; apply_fail "nao foi possivel validar resultado do Codex"; }
+  rm -f "$STATUS_FILE"
   VALID=1
   [ "$CODEX_EXIT" -eq 0 ] || VALID=0
-  [ -n "$FINAL_STATUS" ] || VALID=0
+  [ "${#CHANGED_PATHS[@]}" -gt 0 ] || VALID=0
 
-  while IFS= read -r CHANGED_FILE; do
-    [ -n "$CHANGED_FILE" ] || continue
-    if ! printf '%s\n' "$ALLOWED_FILES" | grep -Fqx -- "$CHANGED_FILE"; then
-      echo "FALHA: arquivo fora da allowlist: $CHANGED_FILE"
+  ALLOWED_PATHS=()
+  while IFS= read -r ALLOWED_FILE; do
+    [ -n "$ALLOWED_FILE" ] && ALLOWED_PATHS+=("$ALLOWED_FILE")
+  done <<EOF_APPLY_ALLOWED_ARRAY
+$ALLOWED_FILES
+EOF_APPLY_ALLOWED_ARRAY
+
+  for CHANGED_FILE in "${CHANGED_PATHS[@]}"; do
+    FOUND_ALLOWED=0
+    for ALLOWED_FILE in "${ALLOWED_PATHS[@]}"; do
+      [ "$CHANGED_FILE" = "$ALLOWED_FILE" ] && FOUND_ALLOWED=1 && break
+    done
+    if [ "$FOUND_ALLOWED" -ne 1 ]; then
+      printf 'FALHA: arquivo fora da allowlist: %q\n' "$CHANGED_FILE"
       VALID=0
     fi
-  done <<EOF_APPLY_CHANGED
-$CHANGED_FILES
-EOF_APPLY_CHANGED
+  done
   [ "$VALID" -eq 1 ] || apply_fail "validacao independente reprovada; nenhum commit criado"
 
   # Stage cada caminho permitido que foi alterado; nunca usar staging amplo.
-  while IFS= read -r ALLOWED_FILE; do
-    [ -n "$ALLOWED_FILE" ] || continue
-    if printf '%s\n' "$CHANGED_FILES" | grep -Fqx -- "$ALLOWED_FILE"; then
-      git -C "$WORKTREE" add -A -- "$ALLOWED_FILE" || apply_fail "falha ao adicionar caminho permitido ao staging"
-    fi
-  done <<EOF_APPLY_STAGE
-$ALLOWED_FILES
-EOF_APPLY_STAGE
+  for ALLOWED_FILE in "${ALLOWED_PATHS[@]}"; do
+    for CHANGED_FILE in "${CHANGED_PATHS[@]}"; do
+      if [ "$CHANGED_FILE" = "$ALLOWED_FILE" ]; then
+        git -C "$WORKTREE" add -A -- "$ALLOWED_FILE" || apply_fail "falha ao adicionar caminho permitido ao staging"
+        break
+      fi
+    done
+  done
 
-  STAGED_FILES="$(git -C "$WORKTREE" diff --cached --name-only)" || apply_fail "nao foi possivel validar staging"
-  [ -n "$STAGED_FILES" ] || apply_fail "nenhuma alteracao staged; commit vazio impedido"
-  while IFS= read -r STAGED_FILE; do
-    [ -n "$STAGED_FILE" ] || continue
-    if ! printf '%s\n' "$ALLOWED_FILES" | grep -Fqx -- "$STAGED_FILE"; then
-      apply_fail "caminho staged fora da allowlist: $STAGED_FILE"
-    fi
-  done <<EOF_APPLY_STAGED
-$STAGED_FILES
-EOF_APPLY_STAGED
+  STAGED_FILE="$(mktemp)" || apply_fail "nao foi possivel criar arquivo temporario de validacao staged"
+  git -C "$WORKTREE" diff --cached --name-only --no-renames -z > "$STAGED_FILE" || { rm -f "$STAGED_FILE"; apply_fail "nao foi possivel validar staging"; }
+  STAGED_PATHS=()
+  while IFS= read -r -d '' STAGED_PATH; do
+    STAGED_PATHS+=("$STAGED_PATH")
+  done < "$STAGED_FILE"
+  rm -f "$STAGED_FILE"
+  [ "${#STAGED_PATHS[@]}" -gt 0 ] || apply_fail "nenhuma alteracao staged; commit vazio impedido"
+  for STAGED_PATH in "${STAGED_PATHS[@]}"; do
+    FOUND_ALLOWED=0
+    for ALLOWED_FILE in "${ALLOWED_PATHS[@]}"; do
+      [ "$STAGED_PATH" = "$ALLOWED_FILE" ] && FOUND_ALLOWED=1 && break
+    done
+    [ "$FOUND_ALLOWED" -eq 1 ] || { printf 'caminho staged fora da allowlist: %q\n' "$STAGED_PATH"; apply_fail "caminho staged fora da allowlist"; }
+  done
 
   git -C "$WORKTREE" diff --cached --check || apply_fail "git diff --cached --check falhou"
   ISSUE_COMMIT="bridge: apply issue #$NUMBER"
   git -C "$WORKTREE" commit -m "$ISSUE_COMMIT" || apply_fail "commit falhou"
   COMMIT_HASH="$(git -C "$WORKTREE" rev-parse HEAD)" || apply_fail "nao foi possivel ler commit criado"
+  printf -v STAGED_FILES '%s\n' "${STAGED_PATHS[@]}"
 
   {
     echo "## Resultado automático do PMOBILE Bridge"
@@ -227,9 +274,9 @@ EOF_APPLY_STAGED
   } > "$COMMENT_FILE"
 
   if ! gh issue comment "$NUMBER" --repo "$REPO" --body-file "$COMMENT_FILE"; then
-    apply_fail "commit criado, mas falhou ao comentar resultado"
+    apply_report_fail "falhou ao comentar resultado"
   fi
-  gh issue edit "$NUMBER" --repo "$REPO" --remove-label "pmobile:processing" --add-label "pmobile:done" >/dev/null || apply_fail "commit criado, mas falhou ao marcar issue done"
+  gh issue edit "$NUMBER" --repo "$REPO" --remove-label "pmobile:processing" --add-label "pmobile:done" >/dev/null || apply_report_fail "falhou ao marcar issue done"
   echo "APPLY concluido: $COMMIT_HASH; sem push."
   exit 0
 fi
