@@ -1,0 +1,44 @@
+DIAGNOSTICO DA DIVERGENCIA QUE BLOQUEOU A AUDITORIA OTA
+Data: 2026-10-18
+
+Escopo
+
+Leitura direta dos worktrees ~/PMOBILE-Android e ~/PMOBILE-BRIDGE-WORK e das refs locais do repositório Git PMOBILE. Nenhum arquivo do PMOBILE foi alterado; não houve checkout, reset, merge, build, commit nem push no PMOBILE.
+
+Estado observado
+
+PMOBILE-Android:
+- Raiz Git: /data/data/com.termux/files/home/PMOBILE-Android.
+- Branch: ota-update.
+- HEAD: 6d542e334b84b6268935eb8d0ff2454ddde357bf ("ota: adiciona leitura do estado persistente").
+- Worktree sujo: OtaManager.java modificado; OtaManifest.java e OtaVersion.java não rastreados.
+- O diff rastreado local acrescenta 9 linhas em OtaManager.java; os dois arquivos novos também são trabalho local e não estão representados pelo HEAD.
+
+PMOBILE-BRIDGE-WORK:
+- O arquivo .git aponta para /data/data/com.termux/files/home/pmobile-bridge/.git/worktrees/pmobile-bridge-work. Portanto este é um worktree da cópia PMOBILE Bridge, com branch própria, não o checkout PMOBILE-Android.
+- Branch: bridge/test-003.
+- HEAD: 63bdbf896490ad5c1bb017068661153e1caa83fb ("bridge: apply issue #23").
+- Worktree limpo no momento da coleta.
+- O commit contém apenas AUDITORIA/diagnostico/relatório da issue #23, não mudanças de código OTA do checkout PMOBILE-Android.
+
+Relação de ancestralidade
+
+No repositório PMOBILE-Android, bridge/test-003 e ota-update não são branches de linhas independentes: bridge/test-003 está exatamente um commit à frente de ota-update. O merge-base é 6d542e334b84b6268935eb8d0ff2454ddde357bf; contagem esquerda/direita bridge/test-003...ota-update = 1 0. Assim, PMOBILE-Android está atrás do HEAD de PMOBILE-BRIDGE-WORK por um commit. Os dois HEADs não são iguais.
+
+Quanto aos branches de código relevantes do PMOBILE, android-capacitor (e origin/android-capacitor) apontam para 6568bf2b2acb40ebb86c891461848ae0b72135b2. ota-update descende desse commit: merge-base = 6568bf2b2acb40ebb86c891461848ae0b72135b2 e rev-list ota-update...android-capacitor = 5 0. Portanto ota-update contém cinco commits à frente e android-capacitor não contém commits exclusivos em relação a ota-update. Não há divergência de ancestralidade entre esses dois branches; há avanço linear de ota-update, que permanece local segundo as refs observadas. O worktree sujo acrescenta mudanças que ainda não pertencem a nenhum dos commits.
+
+Por que a auditoria anterior foi recusada
+
+A recusa decorre da identidade e do estado do checkout usado para a solicitação: o receiver estava operando no worktree BRIDGE (`bridge/test-003`, HEAD 63bdbf8), mas o alvo da auditoria era o código OTA em `PMOBILE-Android` (`ota-update`, HEAD 6d542e3). Os HEADs diferem por um commit e os diretórios Git são worktrees de repositórios/propósitos distintos. Além disso, a árvore do alvo PMOBILE não está limpa: contém uma edição em OtaManager.java e duas classes novas não rastreadas. Logo, uma auditoria apresentada como resultado do snapshot limpo/identificado pelo receiver não poderia ser atribuída com segurança ao conteúdo de `ota-update` apenas pelo estado do worktree Bridge; as alterações locais também não têm SHA de commit que as identifique.
+
+O ponto decisivo não é que `ota-update` e `android-capacitor` tenham histórico divergente: a comparação mostra relação linear de descendência. A divergência que bloqueia a auditoria é entre o checkout/HEAD do alvo e o worktree/HEAD em que o receiver executa, agravada por alterações locais não commitadas no alvo. O receiver não pode validar uma auditoria reprodutível contra o SHA do alvo enquanto o código OTA relevante está parcialmente fora do commit. As evidências locais permitem identificar essa incompatibilidade de checkout/status; não foi localizado log de execução do receiver que permita atribuir uma mensagem literal adicional à recusa.
+
+Correção segura recomendada
+
+Preservar os três itens locais do OTA em `PMOBILE-Android` (incluindo cópias de segurança fora do caminho de edição, se a rotina de preservação exigir), revisar e registrar essas alterações em commits apropriados no próprio repositório PMOBILE e no branch `ota-update`, sem sobrescrevê-las. Em seguida, executar a auditoria diretamente em `~/PMOBILE-Android`, com branch e SHA explicitamente registrados e worktree limpo; confirmar que o receiver aponta para esse checkout/alvo e não para o worktree Bridge. Não fazer merge, reset ou checkout sobre as alterações existentes. A auditoria deve comparar a ponta limpa de `ota-update` com `android-capacitor` e declarar o SHA exato examinado.
+
+Verificações
+
+- `git status` e `git rev-parse` nos dois worktrees; `git branch -avv`, `show-ref`, `merge-base`, `rev-list --left-right --count` e logs locais do PMOBILE.
+- `git diff --cached --check` no worktree BRIDGE após adicionar somente este relatório: aprovado, sem whitespace problemático.
+- Nenhum build ou teste executado.
