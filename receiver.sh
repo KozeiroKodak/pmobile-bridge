@@ -118,7 +118,11 @@ if [ "$MODE" = "APPLY" ]; then
       echo
       echo "Diagnóstico: $reason"
       echo
-      echo "Publicação: não executada pelo receiver nesta edição de hardening."
+      if [ "${APPLY_FAILURE_STAGE:-}" = "publication" ]; then
+        echo "Falha na etapa publication; o commit local permanece preservado."
+      else
+        echo "Publicação: não executada pelo receiver."
+      fi
       echo
       echo "Validações executadas: allowlist e validação independente do receiver até o ponto da falha."
     } > "$COMMENT_FILE"
@@ -324,7 +328,38 @@ EOF_APPLY_ALLOWED_ARRAY
     if [ -z "$EXPECTED_REMOTE" ]; then
       apply_fail "destino de publicacao indisponivel: remoto origin nao configurado; push desabilitado e commit local $COMMIT_HASH preservado"
     fi
-    apply_fail "publicacao/push solicitado, mas desabilitado nesta etapa de hardening; destino nao alterado e commit local $COMMIT_HASH preservado"
+    PUSH_BRANCH="pmobile-issue-$NUMBER-apply"
+    case "$PUSH_BRANCH" in
+      main|android-capacitor|ota-update|master|develop|release|production)
+        apply_fail "branch protegida rejeitada: $PUSH_BRANCH; commit local $COMMIT_HASH preservado" ;;
+    esac
+    case "$PUSH_BRANCH" in
+      pmobile-issue-[0-9]*-apply) ;;
+      *) apply_fail "branch de publicacao invalida: $PUSH_BRANCH; commit local $COMMIT_HASH preservado" ;;
+    esac
+
+    REMOTE_REF="refs/heads/$PUSH_BRANCH"
+    REMOTE_BEFORE="$(git -C "$WORKTREE" ls-remote --heads origin "$REMOTE_REF" 2>/dev/null)" || \
+      apply_fail "nao foi possivel consultar origin antes do push; commit local $COMMIT_HASH preservado"
+    if [ -n "$REMOTE_BEFORE" ]; then
+      REMOTE_BEFORE_SHA="${REMOTE_BEFORE%%[[:space:]]*}"
+      if [ "$REMOTE_BEFORE_SHA" != "$COMMIT_HASH" ]; then
+        apply_fail "branch remota $PUSH_BRANCH ja existe com SHA incompativel ($REMOTE_BEFORE_SHA); commit local $COMMIT_HASH preservado"
+      fi
+    fi
+
+    if ! git -C "$WORKTREE" push origin "HEAD:$REMOTE_REF"; then
+      apply_fail "git push para origin/$PUSH_BRANCH falhou; commit local $COMMIT_HASH preservado"
+    fi
+
+    REMOTE_AFTER="$(git -C "$WORKTREE" ls-remote --heads origin "$REMOTE_REF" 2>/dev/null)" || \
+      apply_fail "nao foi possivel confirmar SHA remoto apos push para $PUSH_BRANCH; commit local $COMMIT_HASH preservado"
+    REMOTE_AFTER_SHA="${REMOTE_AFTER%%[[:space:]]*}"
+    if [ -z "$REMOTE_AFTER_SHA" ] || [ "$REMOTE_AFTER_SHA" != "$COMMIT_HASH" ]; then
+      apply_fail "SHA remoto de $PUSH_BRANCH nao corresponde ao commit APPLY ($COMMIT_HASH; remoto: ${REMOTE_AFTER_SHA:-ausente}); commit local preservado"
+    fi
+    PUSH_CONFIRMED=1
+    echo "Publicacao confirmada: origin/$PUSH_BRANCH -> $REMOTE_AFTER_SHA"
   fi
   printf -v STAGED_FILES '%s\n' "${STAGED_PATHS[@]}"
 
@@ -344,7 +379,7 @@ EOF_APPLY_ALLOWED_ARRAY
     if [ "$PUSH_CONFIRMED" -eq 1 ]; then
       echo "Push confirmado: refs/heads/$PUSH_BRANCH aponta para $COMMIT_HASH."
     else
-      echo "Publicacao/push nao executada nesta etapa de hardening."
+      echo "Publicacao/push nao solicitada."
     fi
   } > "$COMMENT_FILE"
 
