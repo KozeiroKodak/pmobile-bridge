@@ -1,0 +1,397 @@
+#!/data/data/com.termux/files/usr/bin/bash
+set -u
+
+REPO="KozeiroKodak/pmobiletest"
+PROJECT="$HOME/PMOBILE-Android"
+WORKTREE="$HOME/PMOBILE-BRIDGE-WORK"
+RESULT="$HOME/pmobile-bridge/codex-result.txt"
+COMMENT_FILE="$HOME/pmobile-bridge/comment.txt"
+
+echo "===== PMOBILE BRIDGE v4 ====="
+
+TASK="$(
+  gh issue list \
+    --repo "$REPO" \
+    --state open \
+    --label "pmobile:pending" \
+    --search '"[PMOBILE-BRIDGE]" in:title' \
+    --limit 1 \
+    --json number,title \
+    --jq '.[0] | select(. != null) | "\(.number)|\(.title)"'
+)"
+
+if [ -z "$TASK" ]; then
+  echo "Nenhuma tarefa pendente."
+  exit 0
+fi
+
+IFS='|' read -r NUMBER TITLE <<< "$TASK"
+
+echo "Tarefa: #$NUMBER - $TITLE"
+
+BODY="$(
+  gh issue view "$NUMBER" \
+    --repo "$REPO" \
+    --json body \
+    --jq '.body'
+)" || exit 1
+
+MODE="$(
+  printf '%s\n' "$BODY" |
+  sed -n 's/^MODO:[[:space:]]*//p' |
+  head -n 1 |
+  tr '[:lower:]' '[:upper:]'
+)"
+
+echo "Modo detectado: ${MODE:-NAO INFORMADO}"
+
+BRANCH="$(git -C "$PROJECT" branch --show-current)" || exit 1
+STATUS="$(git -C "$PROJECT" status --short)" || exit 1
+
+echo
+echo "===== PROJETO REAL ====="
+echo "Branch: $BRANCH"
+echo "Status:"
+printf '%s\n' "$STATUS"
+echo "===== FIM ====="
+
+# ============================================================
+# ANALYZE
+# ============================================================
+
+if [ "$MODE" = "ANALYZE" ] || [ -z "$MODE" ]; then
+
+  echo
+  echo "===== CODEX / ANALYZE ====="
+
+  rm -f "$RESULT"
+
+  {
+    echo "Você está participando de um teste controlado do PMOBILE Bridge."
+    echo
+    echo "REGRAS OBRIGATORIAS:"
+    echo "- NAO execute comandos."
+    echo "- NAO use shell ou outras ferramentas."
+    echo "- NAO leia arquivos."
+    echo "- NAO altere arquivos."
+    echo "- Analise SOMENTE os dados fornecidos neste prompt."
+    echo
+    echo "===== INSTRUCAO DA ISSUE ====="
+    printf '%s\n' "$BODY"
+    echo "===== FIM DA INSTRUCAO ====="
+    echo
+    echo "===== DADOS COLETADOS PELO RECEPTOR ====="
+    printf 'BRANCH: %s\n' "$BRANCH"
+    echo "GIT STATUS --SHORT:"
+    printf '%s\n' "$STATUS"
+    echo "===== FIM DOS DADOS ====="
+  } |
+  proot \
+    -b "$PREFIX/etc/resolv.conf:/etc/resolv.conf" \
+    -b "$PREFIX/etc/tls/cert.pem:/etc/ssl/certs/ca-certificates.crt" \
+    codex --no-daemon exec \
+      --sandbox read-only \
+      --cd "$PROJECT" \
+      --output-last-message "$RESULT" \
+      -
+
+  CODEX_EXIT=$?
+
+  echo
+  echo "Codex exit code: $CODEX_EXIT"
+
+  if [ -s "$RESULT" ]; then
+    echo "===== RESPOSTA FINAL DO CODEX ====="
+    cat "$RESULT"
+    echo
+    echo "===== FIM DA RESPOSTA ====="
+  else
+    echo "Codex nao gerou resposta final."
+  fi
+
+  if [ "$CODEX_EXIT" -ne 0 ] || [ ! -s "$RESULT" ]; then
+    gh issue edit "$NUMBER" \
+      --repo "$REPO" \
+      --remove-label "pmobile:pending" \
+      --remove-label "pmobile:processing" \
+      --add-label "pmobile:failed" >/dev/null
+    exit 1
+  fi
+
+  {
+    echo "## Resultado automático do PMOBILE Bridge"
+    echo
+    cat "$RESULT"
+    echo
+    echo "---"
+    echo "Executado pelo receiver v4 em modo de análise, sem alterações no projeto."
+  } > "$COMMENT_FILE"
+
+  echo "Estado: pending -> processing"
+
+  gh issue edit "$NUMBER" \
+    --repo "$REPO" \
+    --remove-label "pmobile:pending" \
+    --add-label "pmobile:processing" >/dev/null || exit 1
+
+  if ! gh issue comment "$NUMBER" \
+    --repo "$REPO" \
+    --body-file "$COMMENT_FILE"
+  then
+    gh issue edit "$NUMBER" \
+      --repo "$REPO" \
+      --remove-label "pmobile:processing" \
+      --add-label "pmobile:failed" >/dev/null
+    exit 1
+  fi
+
+  gh issue edit "$NUMBER" \
+    --repo "$REPO" \
+    --remove-label "pmobile:processing" \
+    --add-label "pmobile:done" >/dev/null || exit 1
+
+  echo "Estado: processing -> done"
+  echo "Tarefa #$NUMBER concluida."
+  echo "===== PMOBILE BRIDGE v4 FINALIZADO ====="
+  exit 0
+fi
+
+# ============================================================
+# EDIT
+# ============================================================
+
+if [ "$MODE" = "EDIT" ]; then
+
+  echo
+  echo "===== CODEX / EDIT CONTROLADO ====="
+
+  # Primeira versão do EDIT: somente teste 003.
+  if [ "$NUMBER" -ne 3 ]; then
+    echo "EDIT automatico ainda nao habilitado para esta tarefa."
+    echo "Somente a tarefa #3 e aceita nesta fase."
+
+    gh issue edit "$NUMBER" \
+      --repo "$REPO" \
+      --remove-label "pmobile:pending" \
+      --add-label "pmobile:failed" >/dev/null
+
+    exit 1
+  fi
+
+  # O projeto real precisa estar intocado.
+  if [ -n "$STATUS" ]; then
+    echo "ERRO: projeto real possui alteracoes."
+    echo "EDIT automatico abortado por seguranca."
+
+    gh issue edit "$NUMBER" \
+      --repo "$REPO" \
+      --remove-label "pmobile:pending" \
+      --add-label "pmobile:failed" >/dev/null
+
+    exit 1
+  fi
+
+  # O worktree precisa existir.
+  if [ ! -d "$WORKTREE/.git" ] && [ ! -f "$WORKTREE/.git" ]; then
+    echo "ERRO: worktree nao encontrado: $WORKTREE"
+
+    gh issue edit "$NUMBER" \
+      --repo "$REPO" \
+      --remove-label "pmobile:pending" \
+      --add-label "pmobile:failed" >/dev/null
+
+    exit 1
+  fi
+
+  INITIAL_STATUS="$(
+    git -C "$WORKTREE" status --porcelain
+  )"
+
+  if [ -n "$INITIAL_STATUS" ]; then
+    echo "ERRO: worktree nao esta limpo."
+    printf '%s\n' "$INITIAL_STATUS"
+
+    gh issue edit "$NUMBER" \
+      --repo "$REPO" \
+      --remove-label "pmobile:pending" \
+      --add-label "pmobile:failed" >/dev/null
+
+    exit 1
+  fi
+
+  echo "Worktree validado:"
+  echo "$WORKTREE"
+  echo "Estado inicial: LIMPO"
+
+  gh issue edit "$NUMBER" \
+    --repo "$REPO" \
+    --remove-label "pmobile:pending" \
+    --add-label "pmobile:processing" >/dev/null || exit 1
+
+  rm -f "$RESULT"
+
+  {
+    echo "Você está executando uma edição CONTROLADA do PMOBILE Bridge."
+    echo
+    echo "DIRETORIO DE TRABALHO:"
+    echo "$WORKTREE"
+    echo
+    echo "REGRAS OBRIGATORIAS:"
+    echo "- Trabalhe SOMENTE no diretorio atual."
+    echo "- Execute a tarefa descrita abaixo."
+    echo "- NAO faca commit."
+    echo "- NAO faca push."
+    echo "- NAO use checkout."
+    echo "- NAO use reset."
+    echo "- NAO use stash."
+    echo "- NAO use clean."
+    echo "- Nao altere arquivos fora da tarefa."
+    echo
+    echo "===== INSTRUCAO DA ISSUE ====="
+    printf '%s\n' "$BODY"
+    echo "===== FIM DA INSTRUCAO ====="
+  } |
+  proot \
+    -b "$PREFIX/etc/resolv.conf:/etc/resolv.conf" \
+    -b "$PREFIX/etc/tls/cert.pem:/etc/ssl/certs/ca-certificates.crt" \
+    codex --no-daemon exec \
+      --dangerously-bypass-approvals-and-sandbox \
+      --cd "$WORKTREE" \
+      --output-last-message "$RESULT" \
+      -
+
+  CODEX_EXIT=$?
+
+  echo
+  echo "Codex exit code: $CODEX_EXIT"
+
+  if [ -s "$RESULT" ]; then
+    echo "===== RESPOSTA FINAL DO CODEX ====="
+    cat "$RESULT"
+    echo
+    echo "===== FIM DA RESPOSTA ====="
+  fi
+
+  # ==========================================================
+  # VALIDACAO INDEPENDENTE
+  # ==========================================================
+
+  echo
+  echo "===== VALIDACAO INDEPENDENTE ====="
+
+  FINAL_STATUS="$(
+    git -C "$WORKTREE" status --porcelain
+  )"
+
+  echo "Estado final:"
+  printf '%s\n' "$FINAL_STATUS"
+
+  EXPECTED="?? bridge-test.txt"
+
+  VALID=1
+
+  if [ "$CODEX_EXIT" -ne 0 ]; then
+    echo "FALHA: Codex retornou erro."
+    VALID=0
+  fi
+
+  if [ "$FINAL_STATUS" != "$EXPECTED" ]; then
+    echo "FALHA: alteracoes diferentes do esperado."
+    echo "Esperado:"
+    echo "$EXPECTED"
+    VALID=0
+  fi
+
+  if [ ! -f "$WORKTREE/bridge-test.txt" ]; then
+    echo "FALHA: bridge-test.txt nao foi criado."
+    VALID=0
+  elif [ "$(cat "$WORKTREE/bridge-test.txt")" != "PMOBILE BRIDGE EDIT OK" ]; then
+    echo "FALHA: conteudo incorreto."
+    VALID=0
+  fi
+
+  if [ "$VALID" -ne 1 ]; then
+    echo
+    echo "RESULTADO: REPROVADO"
+
+    {
+      echo "## Resultado automático do PMOBILE Bridge"
+      echo
+      echo "### EDIT controlado"
+      echo
+      echo "Resultado: REPROVADO"
+      echo
+      echo "Estado final do worktree:"
+      printf '```text\n%s\n```\n' "$FINAL_STATUS"
+      echo
+      echo "Resposta do Codex:"
+      cat "$RESULT" 2>/dev/null || true
+    } > "$COMMENT_FILE"
+
+    gh issue comment "$NUMBER" \
+      --repo "$REPO" \
+      --body-file "$COMMENT_FILE" >/dev/null || true
+
+    gh issue edit "$NUMBER" \
+      --repo "$REPO" \
+      --remove-label "pmobile:processing" \
+      --add-label "pmobile:failed" >/dev/null || true
+
+    exit 1
+  fi
+
+  echo "Arquivo permitido: bridge-test.txt"
+  echo "Conteudo validado: OK"
+  echo "Nenhuma outra alteracao detectada."
+  echo
+  echo "RESULTADO: APROVADO"
+
+  {
+    echo "## Resultado automático do PMOBILE Bridge"
+    echo
+    echo "### EDIT controlado"
+    echo
+    echo "Resultado: APROVADO"
+    echo
+    echo "Arquivo criado:"
+    echo "\`bridge-test.txt\`"
+    echo
+    echo "Conteudo:"
+    echo "\`PMOBILE BRIDGE EDIT OK\`"
+    echo
+    echo "Validacao independente do receiver: OK"
+    echo
+    echo "Nenhum commit ou push foi realizado."
+  } > "$COMMENT_FILE"
+
+  if ! gh issue comment "$NUMBER" \
+    --repo "$REPO" \
+    --body-file "$COMMENT_FILE"
+  then
+    gh issue edit "$NUMBER" \
+      --repo "$REPO" \
+      --remove-label "pmobile:processing" \
+      --add-label "pmobile:failed" >/dev/null
+    exit 1
+  fi
+
+  gh issue edit "$NUMBER" \
+    --repo "$REPO" \
+    --remove-label "pmobile:processing" \
+    --add-label "pmobile:done" >/dev/null || exit 1
+
+  echo
+  echo "Estado: processing -> done"
+  echo "Tarefa #$NUMBER concluida."
+  echo "===== PMOBILE BRIDGE v4 FINALIZADO ====="
+  exit 0
+fi
+
+echo "ERRO: modo desconhecido: $MODE"
+
+gh issue edit "$NUMBER" \
+  --repo "$REPO" \
+  --remove-label "pmobile:pending" \
+  --add-label "pmobile:failed" >/dev/null || true
+
+exit 1
