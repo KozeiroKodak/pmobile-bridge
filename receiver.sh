@@ -217,19 +217,35 @@ if [ "$MODE" = "EDIT" ]; then
   echo "HEAD projeto real: $REAL_HEAD"
   echo "HEAD worktree:     $WORKTREE_HEAD"
 
-  if [ "$REAL_HEAD" != "$WORKTREE_HEAD" ]; then
-    echo "ERRO: projeto real e worktree possuem HEADs diferentes."
-    echo "EDIT automatico abortado por seguranca."
+  if [ "$TARGET" = "BRIDGE" ]; then
+    if ! git -C "$WORKTREE" merge-base --is-ancestor "$REAL_HEAD" "$WORKTREE_HEAD"; then
+      echo "ERRO: worktree do BRIDGE esta atras ou divergente do projeto real."
+      echo "EDIT automatico abortado por seguranca."
 
-    gh issue edit "$NUMBER" \
-      --repo "$REPO" \
-      --remove-label "pmobile:pending" \
-      --add-label "pmobile:failed" >/dev/null
+      gh issue edit "$NUMBER" \
+        --repo "$REPO" \
+        --remove-label "pmobile:pending" \
+        --add-label "pmobile:failed" >/dev/null
 
-    exit 1
+      exit 1
+    fi
+
+    echo "HEAD validado: worktree do BRIDGE e igual ou descendente do projeto real."
+  else
+    if [ "$REAL_HEAD" != "$WORKTREE_HEAD" ]; then
+      echo "ERRO: projeto real e worktree possuem HEADs diferentes."
+      echo "EDIT automatico abortado por seguranca."
+
+      gh issue edit "$NUMBER" \
+        --repo "$REPO" \
+        --remove-label "pmobile:pending" \
+        --add-label "pmobile:failed" >/dev/null
+
+      exit 1
+    fi
+
+    echo "HEAD validado: projeto real e worktree sao iguais."
   fi
-
-  echo "HEAD validado: projeto real e worktree sao iguais."
 
   INITIAL_STATUS="$(
     git -C "$WORKTREE" status --porcelain
