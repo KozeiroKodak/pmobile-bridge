@@ -1,0 +1,96 @@
+AUDITORIA OTA PMOBILE — 2026-10-18
+
+Escopo e limite desta coleta
+
+A solicitação pede auditoria integral do estado OTA no checkout PMOBILE, incluindo fontes Android, arquivos relacionados e espelho web www. O diretório de trabalho desta execução é /data/data/com.termux/files/home/pmobile-bridge-work, que contém o repositório PMOBILE Bridge. A listagem local mostrou apenas arquivos do Bridge e auditorias já existentes; não há checkout PMOBILE, fontes OTA Java, package.json, capacitor.config.json, Android ou www neste diretório. A regra desta execução limita o trabalho ao diretório atual e permite editar somente este relatório. Portanto, não acessei outro diretório, não fiz clone/fetch e não alterei qualquer código.
+
+A auditoria PMOBILE anterior, já armazenada em AUDITORIA/pmobile-auditoria-completa-2026-10-18.txt, é usada abaixo como evidência secundária. Ela registra estado e nomes de arquivos, mas declara que a inspeção funcional OTA foi resumida e que execução/build não foram feitos. Assim, não é possível afirmar que os arquivos OTA foram lidos integralmente nesta execução. Os itens que dependem do conteúdo-fonte são marcados como NÃO VERIFICÁVEIS, em vez de serem inferidos como corretos.
+
+Resumo executivo
+
+- A auditoria anterior registra branch local `ota-update` do repositório PMOBILE-Android em `6d542e334b84b6268935eb8d0ff2454ddde357bf`, com alteração em `OtaManager.java` e dois arquivos novos não rastreados, `OtaManifest.java` e `OtaVersion.java`.
+- Os commits OTA registrados são `75f1bf2` (estrutura inicial), `34c6804` (navegação pelo botão voltar), `f05a56c` (armazenamento), `dbef9c6` (persistência) e `6d542e3` (leitura do estado persistente). O relatório anterior informa que estes commits não constavam nos refs remotos PMOBILE consultados naquele momento.
+- O relatório anterior descreve PMOBILE como app web híbrido Capacitor, `webDir: www`, com Android nativo. Ele também registra um APK debug mais antigo que o trabalho OTA, sem evidência de que inclua OTA.
+- A integração real do fluxo OTA com o WebView, o conteúdo e sincronização entre fontes raiz e `www`, a validação do manifesto, instalação/ativação/rollback e segurança não podem ser confirmados sem ler os arquivos correspondentes.
+- O próximo commit deve ser pequeno e baseado no código atual: após abrir o checkout autorizado e revisar os três arquivos OTA completos, fechar uma única lacuna demonstrável em `OtaManager`/manifesto/versão, com critério verificável. Não se deve agrupar mudanças de UI/web, Supabase ou build nesse commit.
+
+Evidência do workspace e branch Bridge
+
+- Diretório: `/data/data/com.termux/files/home/pmobile-bridge-work`.
+- Branch: `bridge/apply-v1`; HEAD `d75df220d08c165b5a8770643f4e21fa50d00731`, commit `bridge: apply issue #21`.
+- `origin/pmobile-issue-21-apply` aponta para o mesmo SHA no momento desta coleta. `origin/main` aponta para `60ce921e2357cbdcce4667338327fb6de6c9cbe0`.
+- O status local observado no início da coleta estava limpo. O remoto não tem `pmobile-issue-22-apply` no resultado de `git ls-remote` desta coleta. Isso documenta apenas refs do Bridge, não refs do repositório PMOBILE.
+- Este SHA local/remoto do Bridge não é SHA de commit OTA nem evidencia publicação do OTA.
+
+Estado OTA informado pela auditoria anterior
+
+Checkout e histórico:
+
+- Repositório PMOBILE-Android: `~/PMOBILE-Android`; branch `ota-update`.
+- HEAD registrado: `6d542e334b84b6268935eb8d0ff2454ddde357bf`.
+- Estado de trabalho registrado: `M android/app/src/main/java/com/pmobile/app/OtaManager.java`; `?? android/app/src/main/java/com/pmobile/app/OtaManifest.java`; `?? android/app/src/main/java/com/pmobile/app/OtaVersion.java`.
+- A auditoria anterior registrou remotos PMOBILE `main=1309d957f264dd9716f089b944b025b9c28faabc` e `android-capacitor=6568bf2b2acb40ebb86c891461848ae0b72135b2`; não encontrou `ota-update` publicado nos refs consultados. Como não houve coleta direta dos refs PMOBILE nesta execução, estes valores são reproduzidos como registro anterior, não revalidados.
+- A árvore OTA e seu histórico completo não estão presentes no workspace atual; não foi possível inspecionar os diffs, todas as chamadas, nem confirmar que o checkout permanece nesse estado.
+
+Implementado, segundo evidência registrada:
+
+- Há uma estrutura Java chamada `OtaManager` e commits que, pelos assuntos/nomeados da auditoria anterior, avançaram armazenamento, persistência e leitura de estado persistente.
+- Há um ajuste de navegação via botão voltar no histórico local.
+- A aplicação possui estrutura Capacitor Android e conteúdo web servido de `www` (`webDir: www` no `capacitor.config.json` conforme a auditoria anterior).
+- A aplicação usa páginas/scripts web e integração Supabase no projeto geral; isso não prova integração OTA com esses componentes.
+
+Incompleto ou pendente, conforme o status registrado:
+
+- `OtaManager.java` tinha alterações locais não commitadas.
+- `OtaManifest.java` e `OtaVersion.java` eram arquivos novos não rastreados.
+- O branch `ota-update` não estava publicado nos remotos PMOBILE consultados pela auditoria anterior.
+- O APK debug encontrado antecedia os commits OTA e não comprova conter essa implementação.
+- A auditoria anterior não certificou execução OTA, atualização de assets, troca de versão, recuperação de falha, rollback, compatibilidade entre conteúdo embarcado e baixado, nem comportamento em WebView.
+
+Ausente ou sem evidência suficiente:
+
+- Não foi encontrada evidência disponível neste workspace de testes automatizados OTA, manifesto remoto publicado, endpoint de distribuição, estratégia documentada de rollback, verificação criptográfica/assinatura do pacote, política de compatibilidade de versão ou recuperação após interrupção. Isto significa “não demonstrado”, não necessariamente “inexistente” no checkout PMOBILE.
+- Não há evidência inspecionada ligando `OtaManager` à inicialização da `MainActivity`, ao ciclo de vida Capacitor/WebView, nem à decisão de carregar assets OTA contra `www` embarcado.
+- Não foi possível comparar os arquivos web raiz com `www`; portanto não se pode afirmar igualdade, sincronização ou divergência.
+
+Integração Capacitor/WebView e www
+
+A auditoria prévia registra `capacitor.config.json` com `webDir: www`, pacote Capacitor Android/CLI/Core `^8.5.3` e App `8.1.2`, além de `MainActivity.java` e Manifest Android. Esses registros confirmam a arquitetura/configuração em nível de inventário, não o caminho de execução OTA. Sem leitura integral dos fontes, permanecem NÃO VERIFICÁVEIS:
+
+- se OTA baixa conteúdo web, pacote nativo ou ambos;
+- se há validação de origem, hash, assinatura, versão e compatibilidade antes da ativação;
+- onde os arquivos baixados são armazenados e como o WebView seleciona esse diretório;
+- se `www` é fallback íntegro após falha, atualização interrompida ou reinício;
+- se alterações no código web raiz são copiadas para `www` e qual comando faz isso;
+- se plugins nativos necessários permanecem compatíveis com o conteúdo OTA;
+- se a navegação de retorno interfere em estados de download/ativação.
+
+Riscos identificados / riscos não avaliados
+
+- Risco de distribuição: a auditoria anterior identificou APK anterior ao estado OTA e o branch local não publicado. Um artefato antigo pode ser confundido com um build que contém OTA.
+- Risco de perda de trabalho: a auditoria anterior apontou arquivos locais modificados/não rastreados. Não foi possível verificar o estado atual; antes de qualquer alteração no checkout, confirmar novamente `git status` e preservar o conteúdo existente.
+- Risco de integridade/segurança OTA: validação de manifesto, pacote, origem e rollback não foi auditada; não se afirma que esses controles estejam ausentes, mas falta evidência para aprová-los.
+- Risco de incompatibilidade WebView/assets: carregamento, fallback e correspondência entre `www` e os arquivos raiz não foram verificados.
+- Nenhum build ou teste foi executado nesta auditoria; compatibilidade e comportamento em dispositivo permanecem sem certificação.
+
+Não verificável nesta coleta
+
+- Conteúdo integral e diffs de `OtaManager.java`, `OtaManifest.java`, `OtaVersion.java`, `MainActivity.java`, Manifest e recursos Android.
+- Código de `www`, arquivos web raiz, scripts de cópia/sincronização e relação entre eles.
+- Estado atual do checkout `ota-update`, seus refs remotos atuais, arquivos não rastreados e divergência com `android-capacitor`.
+- Protocolo OTA ponta a ponta, rede, formato de manifesto, integridade/autenticidade, instalação, ativação, rollback e recuperação.
+- Execução em Android/WebView, testes, build, conteúdo e hash do APK em relação ao código OTA.
+- Estado Supabase: não é objeto necessário para certificar o fluxo OTA nesta coleta e não foi acessado.
+
+Próximo commit pequeno e verificável
+
+A evidência disponível não permite escolher honestamente uma correção de código específica, pois os arquivos que demonstrariam a lacuna não estão neste workspace. Próximo passo recomendado no checkout PMOBILE autorizado: reler integralmente os três arquivos OTA pendentes e os pontos de integração Android/WebView e `www`; então selecionar uma única fronteira observável. Com o status previamente registrado, o candidato de menor escopo é fechar e rastrear apenas a unidade de manifesto/versão já iniciada, junto da alteração mínima correspondente em `OtaManager`, sem incluir refatoração web ou Supabase. O critério de aceite deve ser definido após inspeção do código (por exemplo, rejeitar manifesto inválido e preservar o estado ativo), com teste específico ou verificação determinística que cubra o comportamento. Se essa lacuna não existir no código atual, escolher a menor falha real encontrada na leitura, não aplicar o candidato por suposição.
+
+O commit só deve ser criado quando diff, critério de aceite e resultado verificável estiverem disponíveis. Nesta execução não foi feito commit nem push. Não existe SHA remoto de OTA confirmado nesta coleta; o SHA remoto confirmado é apenas o branch Bridge `pmobile-issue-21-apply` acima.
+
+Método e artefatos alterados
+
+- Consulta somente leitura ao status, histórico e refs do repositório Bridge no diretório de trabalho.
+- Leitura do relatório anterior `AUDITORIA/pmobile-auditoria-completa-2026-10-18.txt` como registro secundário do estado PMOBILE.
+- Nenhum build, teste, acesso Supabase, checkout, fetch, commit ou push.
+- Único arquivo criado nesta tarefa: `AUDITORIA/ota-auditoria-2026-10-18.txt`.
