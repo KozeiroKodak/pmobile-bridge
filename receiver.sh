@@ -79,7 +79,50 @@ if [ "$MODE" = "APPLY" ]; then
   echo "===== APPLY CONTROLADO NO WORKTREE ====="
 
   apply_fail() {
-    echo "FALHA APPLY: $1"
+    local reason="$1"
+    local current_head=""
+    local local_commit=""
+    current_head="$(git -C "$WORKTREE" rev-parse HEAD 2>/dev/null || true)"
+    if [ "${APPLY_FAILURE_STAGE:-}" = "publication" ] && [ -n "${COMMIT_HASH:-}" ]; then
+      local_commit="$COMMIT_HASH"
+      echo "FALHA DE PUBLICACAO/DESTINO: $reason"
+      echo "Commit local preservado: $local_commit"
+    elif [ -n "${WORKTREE_HEAD:-}" ] && [ -n "$current_head" ] && [ "$current_head" != "$WORKTREE_HEAD" ]; then
+      local_commit="$current_head"
+      echo "FALHA APPLY APOS COMMIT: $reason"
+      echo "Commit local criado pelo APPLY: $local_commit"
+    elif [ -n "${COMMIT_HASH:-}" ]; then
+      local_commit="$COMMIT_HASH"
+      if [ "${APPLY_FAILURE_STAGE:-}" = "publication" ]; then
+        echo "FALHA DE PUBLICACAO/DESTINO: $reason"
+      else
+        echo "FALHA APPLY APOS COMMIT: $reason"
+      fi
+      echo "Commit local preservado: $local_commit"
+    else
+      echo "FALHA APPLY ANTES DO COMMIT: $reason"
+      echo "Nenhum commit do APPLY identificado localmente."
+    fi
+    {
+      echo "## Resultado automático do PMOBILE Bridge"
+      echo
+      echo "### APPLY controlado"
+      echo
+      echo "Resultado: FALHA"
+      echo
+      if [ -n "$local_commit" ]; then
+        echo "Commit local criado/preservado: $local_commit"
+      else
+        echo "Falha antes da criação de commit; nenhum commit do APPLY identificado localmente."
+      fi
+      echo
+      echo "Diagnóstico: $reason"
+      echo
+      echo "Publicação: não executada pelo receiver nesta edição de hardening."
+      echo
+      echo "Validações executadas: allowlist e validação independente do receiver até o ponto da falha."
+    } > "$COMMENT_FILE"
+    gh issue comment "$NUMBER" --repo "$REPO" --body-file "$COMMENT_FILE" >/dev/null 2>&1 || true
     gh issue edit "$NUMBER" \
       --repo "$REPO" \
       --remove-label "pmobile:pending" \
@@ -227,7 +270,7 @@ EOF_APPLY_ALLOWED_ARRAY
       VALID=0
     fi
   done
-  [ "$VALID" -eq 1 ] || apply_fail "validacao independente reprovada; nenhum commit criado"
+  [ "$VALID" -eq 1 ] || apply_fail "validacao independente reprovada"
 
   # Stage cada caminho permitido que foi alterado; nunca usar staging amplo.
   for ALLOWED_FILE in "${ALLOWED_PATHS[@]}"; do
@@ -264,64 +307,24 @@ EOF_APPLY_ALLOWED_ARRAY
   PUSH_YES_COUNT="$(printf '%s\n' "$BODY" | sed -n '/^PUSH:[[:space:]]*YES[[:space:]]*$/p' | wc -l | tr -d '[:space:]')"
   PUSH_ENABLED=0
   if [ "$PUSH_DIRECTIVES" -gt 0 ]; then
-    [ "$PUSH_DIRECTIVES" -eq 1 ] && [ "$PUSH_YES_COUNT" -eq 1 ] || apply_fail "diretiva PUSH ambigua; use exatamente uma linha PUSH: YES para habilitar"
+    [ "$PUSH_DIRECTIVES" -eq 1 ] && [ "$PUSH_YES_COUNT" -eq 1 ] || apply_fail "diretiva PUSH ambigua; commit local $COMMIT_HASH permanece criado"
     PUSH_ENABLED=1
   fi
 
   if [ "$PUSH_ENABLED" -eq 1 ]; then
+    APPLY_FAILURE_STAGE=publication
+    if [ "$TARGET" != "BRIDGE" ]; then
+      apply_fail "publicacao solicitada para alvo sem destino permitido; push desabilitado e commit local $COMMIT_HASH preservado"
+    fi
     case "$NUMBER" in
-      ''|*[!0-9]*) apply_fail "numero de issue invalido para destino de push" ;;
+      ''|*[!0-9]*) apply_fail "numero da issue invalido para determinar destino de publicacao; push desabilitado e commit local $COMMIT_HASH preservado" ;;
     esac
-    [ "$NUMBER" -gt 0 ] 2>/dev/null || apply_fail "numero de issue invalido para destino de push"
-    [ "$TARGET" = "BRIDGE" ] || apply_fail "push opcional permitido somente para alvo BRIDGE"
-    PUSH_BRANCH="pmobile-issue-${NUMBER}-apply"
-    case "$PUSH_BRANCH" in
-      main|master|android-capacitor|ota-update) apply_fail "destino de push proibido" ;;
-      pmobile-issue-[0-9]*-apply) ;;
-      *) apply_fail "destino de push interno invalido" ;;
-    esac
-
-    STATUS_FILE="$(mktemp)" || apply_fail "nao foi possivel criar validacao pre-push"
-    if ! git -C "$WORKTREE" status --porcelain=v1 -z --untracked-files=all > "$STATUS_FILE"; then
-      rm -f "$STATUS_FILE"
-      apply_fail "nao foi possivel validar worktree antes do push"
+    [ "$NUMBER" -gt 0 ] 2>/dev/null || apply_fail "numero da issue invalido para determinar destino de publicacao; push desabilitado e commit local $COMMIT_HASH preservado"
+    EXPECTED_REMOTE="$(git -C "$WORKTREE" remote get-url origin 2>/dev/null || true)"
+    if [ -z "$EXPECTED_REMOTE" ]; then
+      apply_fail "destino de publicacao indisponivel: remoto origin nao configurado; push desabilitado e commit local $COMMIT_HASH preservado"
     fi
-    if [ -s "$STATUS_FILE" ]; then
-      rm -f "$STATUS_FILE"
-      apply_fail "worktree nao esta limpo apos commit; push impedido"
-    fi
-    rm -f "$STATUS_FILE"
-
-    CURRENT_HEAD="$(git -C "$WORKTREE" rev-parse HEAD 2>/dev/null)" || apply_fail "nao foi possivel confirmar HEAD antes do push"
-    [ "$CURRENT_HEAD" = "$COMMIT_HASH" ] || apply_fail "HEAD mudou apos commit; push impedido"
-    EXPECTED_REMOTE="$(git -C "$WORKTREE" remote get-url origin 2>/dev/null)" || apply_fail "remoto origin nao configurado"
-    case "$EXPECTED_REMOTE" in
-      https://github.com/KozeiroKodak/pmobiletest.git|https://github.com/KozeiroKodak/pmobiletest|git@github.com:KozeiroKodak/pmobiletest.git|ssh://git@github.com/KozeiroKodak/pmobiletest.git) ;;
-      *) apply_fail "URL do remoto origin nao corresponde ao repositorio fixo do Bridge" ;;
-    esac
-
-    REMOTE_BEFORE="$(git -C "$WORKTREE" ls-remote --heads origin "refs/heads/$PUSH_BRANCH")" || apply_fail "nao foi possivel consultar branch remota antes do push"
-    REMOTE_SHA="$(printf '%s\n' "$REMOTE_BEFORE" | awk 'NR == 1 {print $1}')"
-    if [ -n "$REMOTE_SHA" ]; then
-      [ "$REMOTE_SHA" = "$COMMIT_HASH" ] || apply_fail "branch remota ja existe com SHA diferente; sobrescrita impedida"
-      PUSH_CONFIRMED=1
-    else
-      if git -C "$WORKTREE" push origin "$COMMIT_HASH:refs/heads/$PUSH_BRANCH"; then
-        PUSH_COMMAND_OK=1
-      else
-        PUSH_COMMAND_OK=0
-      fi
-      REMOTE_AFTER="$(git -C "$WORKTREE" ls-remote --heads origin "refs/heads/$PUSH_BRANCH")" || apply_fail "push incerto e consulta remota posterior falhou; commit local $COMMIT_HASH permanece criado"
-      REMOTE_SHA="$(printf '%s\n' "$REMOTE_AFTER" | awk 'NR == 1 {print $1}')"
-      if [ "$REMOTE_SHA" = "$COMMIT_HASH" ]; then
-        PUSH_CONFIRMED=1
-      elif [ "$PUSH_COMMAND_OK" -eq 0 ]; then
-        apply_fail "push falhou e o SHA esperado nao esta publicado"
-      else
-        apply_fail "push retornou sucesso, mas o SHA remoto nao corresponde ao commit esperado"
-      fi
-    fi
-    echo "Push confirmado: $COMMIT_HASH -> refs/heads/$PUSH_BRANCH"
+    apply_fail "publicacao/push solicitado, mas desabilitado nesta etapa de hardening; destino nao alterado e commit local $COMMIT_HASH preservado"
   fi
   printf -v STAGED_FILES '%s\n' "${STAGED_PATHS[@]}"
 
@@ -341,7 +344,7 @@ EOF_APPLY_ALLOWED_ARRAY
     if [ "$PUSH_CONFIRMED" -eq 1 ]; then
       echo "Push confirmado: refs/heads/$PUSH_BRANCH aponta para $COMMIT_HASH."
     else
-      echo "Nenhum push foi realizado."
+      echo "Publicacao/push nao executada nesta etapa de hardening."
     fi
   } > "$COMMENT_FILE"
 
