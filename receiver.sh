@@ -112,6 +112,10 @@ if [ "$MODE" = "AUDIT" ]; then
   AUDIT_HEAD="$(git -C "$PROJECT_ABS" rev-parse HEAD 2>/dev/null)" || audit_fail "nao foi possivel ler HEAD do projeto"
   AUDIT_STATUS="$(git -C "$PROJECT_ABS" status --short 2>/dev/null)" || audit_fail "nao foi possivel ler status do projeto"
 
+  if ! command -v bwrap >/dev/null 2>&1; then
+    audit_fail "execucao segura somente-leitura indisponivel: esta instalacao do Codex requer Bubblewrap no Termux; auditoria cancelada sem permissao irrestrita"
+  fi
+
   gh issue edit "$NUMBER" \
     --repo "$REPO" \
     --remove-label "pmobile:pending" \
@@ -129,8 +133,9 @@ if [ "$MODE" = "AUDIT" ]; then
     echo
     echo "As alteracoes locais existentes sao preservadas e fazem parte do snapshot auditado."
     echo "Inspecione o projeto diretamente neste diretorio e execute comandos de diagnostico somente-leitura que sejam necessarios."
-    echo "Nao altere nada no projeto: nao escreva arquivos, nem faca git add/stage, commit, push, checkout, reset, clean, stash, merge ou cherry-pick."
-    echo "Nao crie, edite, stageie ou publique arquivos no repositorio PMOBILE, nem faca qualquer outra alteracao nele."
+    echo "PROIBIDO escrever no projeto PMOBILE ou fazer qualquer alteracao nele."
+    echo "PROIBIDO criar, editar, remover, mover ou renomear arquivos ou diretorios no PMOBILE."
+    echo "PROIBIDO executar git add/stage, commit, push, checkout, reset, clean, stash, merge ou cherry-pick no PMOBILE."
     echo
     echo "===== INSTRUCAO DA ISSUE ====="
     printf '%s\n' "$BODY"
